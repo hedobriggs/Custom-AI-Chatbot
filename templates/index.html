@@ -1,0 +1,306 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>My_Local_AI Dashboard</title>
+    <style>
+        :root {
+            --bg-main: #212121;
+            --bg-sidebar: #171717;
+            --bg-card: #2f2f2f;
+            --text-main: #ececec;
+            --text-muted: #b4befe;
+            --border-color: #424242;
+            --user-bubble: #2f2f2f;
+            --accent: #89b4fa;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background-color: var(--bg-main);
+            color: var(--text-main);
+            margin: 0;
+            padding: 0;
+            display: flex;
+            height: 100vh;
+            overflow: hidden;
+        }
+
+        /* ChatGPT Sidebar Style Layout */
+        .sidebar {
+            width: 260px;
+            background-color: var(--bg-sidebar);
+            display: flex;
+            flex-direction: column;
+            padding: 12px;
+            box-sizing: border-box;
+            border-right: 1px solid var(--border-color);
+        }
+
+        .sidebar-title {
+            font-size: 18px;
+            font-weight: 600;
+            color: var(--accent);
+            padding: 10px;
+            margin-bottom: 15px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .config-section {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        .config-label {
+            font-size: 12px;
+            font-weight: 700;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            padding-left: 5px;
+        }
+
+        .config-textarea {
+            width: 100%;
+            height: 120px;
+            background-color: var(--bg-main);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            color: var(--text-main);
+            padding: 10px;
+            font-size: 13px;
+            resize: none;
+            box-sizing: border-box;
+            line-height: 1.4;
+        }
+
+        .config-textarea:focus {
+            outline: 1px solid var(--accent);
+        }
+
+        .logout-link {
+            margin-top: auto;
+            background-color: #313244;
+            color: #f38ba8;
+            text-decoration: none;
+            text-align: center;
+            padding: 12px;
+            border-radius: 6px;
+            font-weight: 600;
+            font-size: 14px;
+            transition: background 0.2s;
+        }
+
+        .logout-link:hover {
+            background-color: #45475a;
+        }
+
+        /* Chat Viewport Main Frame Layout */
+        .main-chat {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            height: 100%;
+            position: relative;
+        }
+
+        .chat-header {
+            height: 60px;
+            border-bottom: 1px solid var(--border-color);
+            display: flex;
+            align-items: center;
+            padding: 0 20px;
+            font-weight: 500;
+            font-size: 16px;
+        }
+
+        .chat-history {
+            flex: 1;
+            overflow-y: auto;
+            padding: 40px 0;
+            display: flex;
+            flex-direction: column;
+            width: 100%;
+            box-sizing: border-box;
+        }
+
+        /* Dynamic Message Floating Bubbles */
+        .message-row {
+            display: flex;
+            width: 100%;
+            padding: 15px 20px;
+            box-sizing: border-box;
+            justify-content: center;
+        }
+
+        .message-wrapper {
+            max-width: 720px;
+            width: 100%;
+            display: flex;
+            gap: 16px;
+        }
+
+        .avatar {
+            width: 30px;
+            height: 30px;
+            border-radius: 4px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: bold;
+            font-size: 12px;
+            flex-shrink: 0;
+        }
+
+        .user-row .avatar { background-color: #585b70; color: white; }
+        .ai-row .avatar { background-color: var(--accent); color: #11111b; }
+
+        .message-body {
+            font-size: 15px;
+            line-height: 1.6;
+            word-wrap: break-word;
+            white-space: pre-wrap;
+            padding-top: 2px;
+        }
+
+        /* Modern Bottom Floating Input Frame */
+        .input-container {
+            width: 100%;
+            display: flex;
+            justify-content: center;
+            padding: 0 20px 24px 20px;
+            box-sizing: border-box;
+            background-color: var(--bg-main);
+        }
+
+        .input-wrapper {
+            max-width: 720px;
+            width: 100%;
+            background-color: var(--bg-card);
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            display: flex;
+            align-items: center;
+            padding: 10px 14px;
+            box-sizing: border-box;
+        }
+
+        .prompt-input {
+            flex: 1;
+            background: transparent;
+            border: none;
+            color: var(--text-main);
+            font-size: 15px;
+            outline: none;
+            padding: 4px 8px;
+        }
+
+        .submit-btn {
+            background-color: var(--text-main);
+            color: var(--bg-main);
+            border: none;
+            width: 32px;
+            height: 32px;
+            border-radius: 8px;
+            font-weight: bold;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: opacity 0.2s;
+        }
+
+        .submit-btn:hover {
+            opacity: 0.85;
+        }
+    </style>
+</head>
+<body>
+
+    <!-- Left Side Panel Settings Navigation Menu -->
+    <div class="sidebar">
+        <div class="sidebar-title">⚙️ My_Local_AI</div>
+        <div class="config-section">
+            <span class="config-label">System Personality</span>
+            <textarea id="system_prompt" class="config-textarea">You are My_Local_AI, a dope local AI system running on Llama 3.2. Formulate your responses beautifully using markdown list blocks.</textarea>
+        </div>
+        <a href="/logout" class="logout-link">Lock Portal</a>
+    </div>
+
+    <!-- Main Workspace Conversation Container viewport frame -->
+    <div class="main-chat">
+        <div class="chat-header">Llama 3.2 Model Session</div>
+        
+        <div class="chat-history" id="chat_box">
+            <div class="message-row ai-row">
+                <div class="message-wrapper">
+                    <div class="avatar">AI</div>
+                    <div class="message-body">Welcome, Operator. System ready. Adjust my personality profile instructions inside the left sidebar or input chat prompts below.</div>
+                </div>
+            </div>
+        </div>
+
+        <div class="input-container">
+            <div class="input-wrapper">
+                <input type="text" id="user_input" class="prompt-input" placeholder="Message My_Local_AI..." onkeydown="if(event.key === 'Enter') sendMessage()">
+                <button onclick="sendMessage()" class="submit-btn">↑</button>
+            </div>
+        </div>
+    </div>
+
+<script>
+    async function sendMessage() {
+        const inputField = document.getElementById('user_input');
+        const systemField = document.getElementById('system_prompt');
+        const chatBox = document.getElementById('chat_box');
+        const messageText = inputField.value.trim();
+        if (!messageText) return;
+
+        // Append User Prompt Row
+        chatBox.innerHTML += `
+            <div class="message-row user-row">
+                <div class="message-wrapper">
+                    <div class="avatar">U</div>
+                    <div class="message-body">${messageText}</div>
+                </div>
+            </div>`;
+        
+        inputField.value = '';
+        chatBox.scrollTop = chatBox.scrollHeight;
+
+        try {
+            const response = await fetch('/chat', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ message: messageText, system_prompt: systemField.value })
+            });
+            const data = await response.json();
+            
+            // Append AI Answer Row
+            chatBox.innerHTML += `
+                <div class="message-row ai-row">
+                    <div class="message-wrapper">
+                        <div class="avatar">AI</div>
+                        <div class="message-body">${data.response || 'Processing error encountered: ' + data.error}</div>
+                    </div>
+                </div>`;
+        } catch {
+            chatBox.innerHTML += `
+                <div class="message-row ai-row" style="color:#f38ba8">
+                    <div class="message-wrapper">
+                        <div class="avatar">ERR</div>
+                        <div class="message-body">Network communication exception tracing backend containers.</div>
+                    </div>
+                </div>`;
+        }
+        chatBox.scrollTop = chatBox.scrollHeight;
+    }
+</script>
+</body>
+</html>
+

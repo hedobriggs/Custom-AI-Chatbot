@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8"><title>My_Local_AI Login</title>
+    <style>
+        body { font-family: 'Segoe UI', sans-serif; background-color: #11111b; color: #cdd6f4; display: flex; justify-content: center; align-items: center; height: 100vh; margin:0;}
+        .login-box { background: #1e1e2e; padding: 40px; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.5); text-align: center; width: 320px; border: 1px solid #45475a;}
+        h1 { color: #89b4fa; margin-bottom: 20px; font-size: 28px; }
+        input[type="password"] { width: 100%; padding: 12px; border-radius: 6px; border: 1px solid #45475a; background: #313244; color: #cdd6f4; box-sizing: border-box; margin-bottom: 15px; text-align:center;}
+        button { width: 100%; padding: 12px; border: none; background: #89b4fa; color: #11111b; font-weight: bold; border-radius: 6px; cursor: pointer; }
+        button:hover { background: #b4befe; }
+        .error { color: #f38ba8; margin-bottom: 15px; font-size: 14px;}
+    </style>
+</head>
+<body>
+    <div class="login-box">
+        <h1>My_Local_AI</h1>
+        {% if error %}<div class="error">{{ error }}</div>{% endif %}
+        <form method="POST" action="/login">
+            <input type="password" name="password" placeholder="Enter Security Password" required autofocus>
+            <button type="submit">Unlock Portal</button>
+        </form>
+    </div>
+</body>
+</html>
+
