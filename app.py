@@ -16,8 +16,9 @@ override with the OLLAMA_HOST environment variable).
 """
 
 import os
+import json
 import requests
-from flask import Flask, request, jsonify, render_template_string, session, redirect, url_for
+from flask import Flask, request, jsonify, render_template_string, session, redirect, url_for, Response
 
 app = Flask(__name__)
 app.secret_key = "ollama-chat-secret"
@@ -25,7 +26,7 @@ app.secret_key = "ollama-chat-secret"
 # Change this to whatever password you want to use
 APP_PASSWORD = "admin"
 
-OLLAMA_HOST = os.environ.get("OLLAMA_HOST", "http://docker.internal")
+OLLAMA_HOST = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
 BASE_MODEL = os.environ.get("BASE_MODEL", "llama3.2")
 
 def login_required(f):
@@ -228,6 +229,34 @@ CHAT_PAGE = """
   .send-btn:hover:not(:disabled) { transform: translateY(-1px); }
   .send-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 
+  .stop-btn {
+    display: none;
+    background: rgba(255,107,107,0.12);
+    border: 1px solid rgba(255,107,107,0.35);
+    border-radius: 12px;
+    color: #ff8f8f;
+    padding: 0 18px;
+    font-weight: 700;
+    font-size: 14px;
+    cursor: pointer;
+  }
+  .stop-btn.show { display: block; }
+  .stop-btn:hover { background: rgba(255,107,107,0.18); }
+
+  .response-wrap {
+    align-self: flex-start;
+    max-width: 70%;
+  }
+  .response-wrap .msg.assistant {
+    max-width: 100%;
+  }
+  .response-meta {
+    margin-top: 5px;
+    padding-left: 4px;
+    color: #646b86;
+    font-size: 11px;
+  }
+
   .modal-overlay {
     position: fixed; inset: 0; background: rgba(0,0,0,0.6); z-index: 10;
     display: none; align-items: center; justify-content: center;
@@ -290,6 +319,7 @@ CHAT_PAGE = """
 
   <div class="input-row">
     <textarea id="userInput" rows="1" placeholder="Type a message..."></textarea>
+    <button class="stop-btn" id="stopBtn">Stop</button>
     <button class="send-btn" id="sendBtn">Send</button>
   </div>
 </div>
@@ -317,6 +347,7 @@ CHAT_PAGE = """
   const messagesEl = document.getElementById('messages');
   const userInput = document.getElementById('userInput');
   const sendBtn = document.getElementById('sendBtn');
+  const stopBtn = document.getElementById('stopBtn');
   const personalityList = document.getElementById('personalityList');
   const activeModelName = document.getElementById('activeModelName');
   const activeModelTag = document.getElementById('activeModelTag');
@@ -331,6 +362,8 @@ CHAT_PAGE = """
 
   let currentModel = "{{ base_model }}";
   let conversation = [];
+  let activeController = null;
+  let isGenerating = false;
 
   function addMessage(role, text) {
     const div = document.createElement('div');
@@ -376,35 +409,129 @@ CHAT_PAGE = """
 
   async function sendMessage() {
     const text = userInput.value.trim();
-    if (!text) return;
+    if (!text || isGenerating) return;
+
+    isGenerating = true;
+    activeController = new AbortController();
 
     addMessage('user', text);
     conversation.push({ role: 'user', content: text });
     userInput.value = '';
+
     sendBtn.disabled = true;
+    stopBtn.classList.add('show');
 
     const thinkingEl = addMessage('thinking', 'Thinking...');
+    const startedAt = performance.now();
+
+    let assistantEl = null;
+    let responseWrap = null;
+    let fullReply = '';
 
     try {
       const res = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ model: currentModel, messages: conversation })
+        body: JSON.stringify({
+          model: currentModel,
+          messages: conversation.slice(-6)
+        }),
+        signal: activeController.signal
       });
-      const data = await res.json();
+
+      if (!res.ok) {
+        const errorText = await res.text();
+        throw new Error(errorText || 'Something went wrong.');
+      }
+
       thinkingEl.remove();
 
-      if (!res.ok) throw new Error(data.error || 'Something went wrong.');
+      responseWrap = document.createElement('div');
+      responseWrap.className = 'response-wrap';
 
-      addMessage('assistant', data.reply);
-      conversation.push({ role: 'assistant', content: data.reply });
+      assistantEl = document.createElement('div');
+      assistantEl.className = 'msg assistant';
+
+      responseWrap.appendChild(assistantEl);
+      messagesEl.appendChild(responseWrap);
+      messagesEl.scrollTop = messagesEl.scrollHeight;
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+
+        const chunk = decoder.decode(value, { stream: true });
+        fullReply += chunk;
+        assistantEl.textContent = fullReply;
+        messagesEl.scrollTop = messagesEl.scrollHeight;
+      }
+
+      fullReply += decoder.decode();
+      assistantEl.textContent = fullReply;
+
+      const elapsed = (performance.now() - startedAt) / 1000;
+      const meta = document.createElement('div');
+      meta.className = 'response-meta';
+      meta.textContent = `Generated in ${elapsed.toFixed(1)}s`;
+      responseWrap.appendChild(meta);
+
+      if (fullReply.trim()) {
+        conversation.push({
+          role: 'assistant',
+          content: fullReply
+        });
+      }
+
     } catch (err) {
-      thinkingEl.remove();
-      addMessage('assistant', '⚠️ ' + err.message);
+      if (thinkingEl.isConnected) thinkingEl.remove();
+
+      const elapsed = (performance.now() - startedAt) / 1000;
+
+      if (err.name === 'AbortError') {
+        if (!responseWrap) {
+          responseWrap = document.createElement('div');
+          responseWrap.className = 'response-wrap';
+
+          assistantEl = document.createElement('div');
+          assistantEl.className = 'msg assistant';
+          assistantEl.textContent = 'Generation stopped.';
+
+          responseWrap.appendChild(assistantEl);
+          messagesEl.appendChild(responseWrap);
+        }
+
+        const meta = document.createElement('div');
+        meta.className = 'response-meta';
+        meta.textContent = `Stopped after ${elapsed.toFixed(1)}s`;
+        responseWrap.appendChild(meta);
+
+        if (fullReply.trim()) {
+          conversation.push({
+            role: 'assistant',
+            content: fullReply
+          });
+        }
+      } else {
+        addMessage('assistant', '⚠️ ' + err.message);
+      }
+
     } finally {
+      isGenerating = false;
+      activeController = null;
       sendBtn.disabled = false;
+      stopBtn.classList.remove('show');
+      userInput.focus();
     }
   }
+
+  stopBtn.addEventListener('click', () => {
+    if (activeController) {
+      activeController.abort();
+    }
+  });
 
   sendBtn.addEventListener('click', sendMessage);
   userInput.addEventListener('keydown', (e) => {
@@ -521,17 +648,34 @@ def create_personality():
 def chat():
     data = request.get_json(force=True)
     model = data.get("model", BASE_MODEL)
-    messages = data.get("messages", [])
+    messages = data.get("messages", [])[-6:]
 
     try:
         res = requests.post(
             f"{OLLAMA_HOST}/api/chat",
-            json={"model": model, "messages": messages, "stream": False},
-            timeout=120,
+            json={"model": model, "messages": messages, "stream": True},
+            stream=True,
+            timeout=(10, 120),
         )
         res.raise_for_status()
-        reply = res.json().get("message", {}).get("content", "").strip()
-        return jsonify({"reply": reply})
+
+        def generate():
+            try:
+                for line in res.iter_lines():
+                    if not line:
+                        continue
+                    chunk = json.loads(line)
+                    content = chunk.get("message", {}).get("content", "")
+                    if content:
+                        yield content
+            finally:
+                res.close()
+
+        return Response(
+            generate(),
+            content_type="text/plain; charset=utf-8",
+            headers={"X-Accel-Buffering": "no"},
+        )
     except Exception as e:
         return jsonify({"error": f"Could not reach the model: {e}"}), 500
 
@@ -542,3 +686,4 @@ if __name__ == "__main__":
     print(f"   Login password: {APP_PASSWORD}")
     print(f"   Ollama host: {OLLAMA_HOST}\n")
     app.run(host="0.0.0.0", port=5000, debug=False)
+
