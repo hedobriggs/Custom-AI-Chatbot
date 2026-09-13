@@ -17,17 +17,70 @@ override with the OLLAMA_HOST environment variable).
 
 import os
 import json
+import sqlite3
 import requests
 from flask import Flask, request, jsonify, render_template_string, session, redirect, url_for, Response
 
 app = Flask(__name__)
-app.secret_key = "ollama-chat-secret"
-
-# Change this to whatever password you want to use
-APP_PASSWORD = "admin"
+APP_SECRET_KEY = os.environ.get("APP_SECRET_KEY")
+APP_PASSWORD = os.environ.get("APP_PASSWORD")
+if not APP_SECRET_KEY or not APP_PASSWORD:
+    raise RuntimeError("APP_SECRET_KEY and APP_PASSWORD must be set in .env")
+app.secret_key = APP_SECRET_KEY
 
 OLLAMA_HOST = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
 BASE_MODEL = os.environ.get("BASE_MODEL", "llama3.2")
+
+DB_PATH = os.environ.get("CHAT_DB_PATH", "/app/data/chat_studio.db")
+
+def get_db():
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+def init_db():
+    db_dir = os.path.dirname(DB_PATH)
+    if db_dir:
+        os.makedirs(db_dir, exist_ok=True)
+
+    with get_db() as conn:
+        conn.execute("""CREATE TABLE IF NOT EXISTS personalities (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL UNIQUE,
+            system_prompt TEXT NOT NULL,
+            base_model TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )""")
+        conn.execute("""CREATE TABLE IF NOT EXISTS chats (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            title TEXT NOT NULL,
+            model TEXT NOT NULL,
+            personality_id INTEGER,
+            personality_name TEXT,
+            system_prompt TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )""")
+        conn.execute("""CREATE TABLE IF NOT EXISTS messages (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            chat_id INTEGER NOT NULL,
+            role TEXT NOT NULL,
+            content TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )""")
+
+        columns = {row["name"] for row in conn.execute("PRAGMA table_info(chats)").fetchall()}
+        for column, sql_type in [
+            ("personality_id", "INTEGER"),
+            ("personality_name", "TEXT"),
+            ("system_prompt", "TEXT"),
+        ]:
+            if column not in columns:
+                conn.execute(f"ALTER TABLE chats ADD COLUMN {column} {sql_type}")
+        conn.commit()
+
+init_db()
 
 def login_required(f):
     from functools import wraps
@@ -44,7 +97,7 @@ LOGIN_PAGE = """
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>Chat Studio — Sign In</title>
+<title>Chat Studio — Hedobriggs 😉</title>
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -112,6 +165,7 @@ LOGIN_PAGE = """
     color: #ff8080; font-size: 13px; padding: 10px 14px; border-radius: 8px;
     margin-bottom: 16px; text-align: center;
   }
+  .owner-brand { text-align:center; color:#a9b0c9; font-size:12px; margin:5px 0 8px; font-weight:600; }
   .footer-note { text-align: center; color: #4d5470; font-size: 11px; margin-top: 24px; }
 </style>
 </head>
@@ -120,7 +174,7 @@ LOGIN_PAGE = """
   <div class="bg-glow glow-2"></div>
   <div class="login-card">
     <div class="logo-badge">💬</div>
-    <h1>Chat Studio</h1>
+    <h1>Chat Studio</h1><div class="owner-brand">Hedobriggs 😉</div>
     <p class="tagline">Sign in to start chatting with your local AI</p>
     {% if error %}<div class="error-msg">{{ error }}</div>{% endif %}
     <form method="POST">
@@ -146,9 +200,29 @@ CHAT_PAGE = """
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
+  :root {
+    --page-bg: #05060f;
+    --text: #eee;
+    --panel: rgba(255,255,255,0.03);
+    --panel-strong: #111426;
+    --border: rgba(255,255,255,0.08);
+    --muted: #7a819c;
+    --message: rgba(255,255,255,0.06);
+    --input: rgba(255,255,255,0.05);
+  }
+  body.light-theme {
+    --page-bg: #f6f7fb;
+    --text: #171827;
+    --panel: rgba(255,255,255,0.88);
+    --panel-strong: #ffffff;
+    --border: rgba(20,24,45,0.12);
+    --muted: #697089;
+    --message: #ffffff;
+    --input: #ffffff;
+  }
   body {
     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-    height: 100vh; background: #05060f; color: #eee; overflow: hidden;
+    height: 100vh; background: var(--page-bg); color: var(--text); overflow: hidden;
     display: flex;
   }
   .bg-glow {
@@ -160,10 +234,11 @@ CHAT_PAGE = """
 
   .sidebar {
     position: relative; z-index: 1; width: 280px; flex-shrink: 0;
-    background: rgba(255,255,255,0.03); border-right: 1px solid rgba(255,255,255,0.08);
+    background: var(--panel); border-right: 1px solid var(--border);
     display: flex; flex-direction: column; padding: 20px;
   }
   .brand { display: flex; align-items: center; gap: 10px; font-weight: 700; font-size: 15px; margin-bottom: 24px; }
+  .brand-owner { font-size: 10px; color: #7a819c; font-weight: 500; margin-top: 2px; }
   .brand .badge {
     width: 30px; height: 30px; border-radius: 9px;
     background: linear-gradient(135deg, #6c5ce7, #00cec9);
@@ -173,7 +248,14 @@ CHAT_PAGE = """
     font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em;
     color: #7a819c; font-weight: 600; margin-bottom: 10px;
   }
-  .personality-list { flex: 1; overflow-y: auto; margin-bottom: 12px; }
+  .personality-list { max-height: 210px; overflow-y: auto; margin-bottom: 12px; }
+  .new-chat-btn { width:100%; padding:12px; margin-bottom:18px; background:linear-gradient(135deg,#6c5ce7,#00b8d4); border:none; border-radius:10px; color:#fff; font-weight:700; cursor:pointer; }
+  .chat-list { flex:1; overflow-y:auto; margin-bottom:16px; min-height:120px; }
+  .chat-item { display:flex; align-items:center; gap:6px; padding:10px 8px 10px 12px; border-radius:9px; margin-bottom:5px; color:#b8bce0; font-size:13px; cursor:pointer; }
+  .chat-item:hover,.chat-item.active { background:rgba(108,92,231,.15); color:#fff; }
+  .chat-title { flex:1; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .delete-chat { border:none; background:transparent; color:#646b86; cursor:pointer; font-size:15px; }
+  .delete-chat:hover { color:#ff8080; }
   .personality-item {
     padding: 12px 14px; border-radius: 10px; margin-bottom: 6px;
     cursor: pointer; font-size: 13.5px; color: #b8bce0;
@@ -183,6 +265,23 @@ CHAT_PAGE = """
   .personality-item.active {
     background: rgba(108,92,231,0.15); border-color: rgba(108,92,231,0.4); color: #fff;
   }
+  .personality-control { position: relative; margin-bottom: 12px; }
+  .personality-control select {
+    width: 100%; padding: 11px 68px 11px 12px; background: var(--panel-strong);
+    border: 1px solid var(--border); border-radius: 10px; color: var(--text);
+    font-size: 13px; outline: none;
+  }
+  .personality-mini-actions {
+    position: absolute; right: 7px; top: 50%; transform: translateY(-50%);
+    display: none; gap: 2px;
+  }
+  .personality-mini-actions.show { display: flex; }
+  .mini-action {
+    width: 24px; height: 24px; padding: 0; border: 0; border-radius: 6px;
+    background: transparent; color: var(--muted); cursor: pointer; font-size: 14px;
+  }
+  .mini-action:hover { background: var(--input); color: var(--text); }
+  .mini-action.danger:hover { color: #ff6b6b; }
   .new-personality-btn {
     width: 100%; padding: 12px; background: rgba(255,255,255,0.05);
     border: 1px dashed rgba(255,255,255,0.15); border-radius: 10px;
@@ -192,16 +291,22 @@ CHAT_PAGE = """
   .new-personality-btn:hover { background: rgba(108,92,231,0.1); border-color: #6c5ce7; color: #fff; }
   .logout-link {
     color: #7a819c; font-size: 12px; text-decoration: none; text-align: center;
-    padding: 10px; border-top: 1px solid rgba(255,255,255,0.08); margin-top: 8px;
+    padding: 10px; border-top: 1px solid var(--border); margin-top: 8px;
   }
   .logout-link:hover { color: #fff; }
 
   .main { position: relative; z-index: 1; flex: 1; display: flex; flex-direction: column; }
   .chat-header {
-    padding: 18px 28px; border-bottom: 1px solid rgba(255,255,255,0.08);
+    padding: 18px 28px; border-bottom: 1px solid var(--border);
     display: flex; align-items: center; justify-content: space-between;
   }
   .chat-header h2 { font-size: 16px; font-weight: 700; }
+  .theme-toggle {
+    border: 1px solid var(--border); background: var(--input); color: var(--text);
+    border-radius: 10px; padding: 9px 12px; cursor: pointer; font-size: 13px;
+  }
+  .theme-toggle:hover { border-color: #6c5ce7; }
+
   .chat-header .model-tag {
     font-size: 11px; color: #7a819c; background: rgba(255,255,255,0.05);
     padding: 4px 10px; border-radius: 20px; margin-top: 4px; display: inline-block;
@@ -210,13 +315,13 @@ CHAT_PAGE = """
   .messages { flex: 1; overflow-y: auto; padding: 28px; display: flex; flex-direction: column; gap: 16px; }
   .msg { max-width: 70%; padding: 13px 16px; border-radius: 14px; font-size: 14px; line-height: 1.6; white-space: pre-wrap; }
   .msg.user { align-self: flex-end; background: linear-gradient(135deg, #6c5ce7, #00b8d4); color: #fff; border-bottom-right-radius: 4px; }
-  .msg.assistant { align-self: flex-start; background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.08); color: #d8dbee; border-bottom-left-radius: 4px; }
+  .msg.assistant { align-self: flex-start; background: var(--message); border: 1px solid var(--border); color: var(--text); border-bottom-left-radius: 4px; }
   .msg.thinking { align-self: flex-start; color: #7a819c; font-style: italic; font-size: 13px; }
 
-  .input-row { padding: 20px 28px 26px; border-top: 1px solid rgba(255,255,255,0.08); display: flex; gap: 12px; }
+  .input-row { padding: 20px 28px 26px; border-top: 1px solid var(--border); display: flex; gap: 12px; }
   .input-row textarea {
-    flex: 1; resize: none; background: rgba(255,255,255,0.05);
-    border: 1px solid rgba(255,255,255,0.1); border-radius: 12px;
+    flex: 1; resize: none; background: var(--input);
+    border: 1px solid var(--border); border-radius: 12px;
     color: #fff; padding: 13px 16px; font-size: 14px; font-family: inherit;
     outline: none; max-height: 120px;
   }
@@ -228,6 +333,7 @@ CHAT_PAGE = """
   }
   .send-btn:hover:not(:disabled) { transform: translateY(-1px); }
   .send-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+  .send-btn.generating { display: none; }
 
   .stop-btn {
     display: none;
@@ -274,8 +380,8 @@ CHAT_PAGE = """
     letter-spacing: 0.05em; font-weight: 600; margin-bottom: 7px;
   }
   .modal-field input, .modal-field textarea {
-    width: 100%; padding: 11px 13px; background: rgba(255,255,255,0.05);
-    border: 1px solid rgba(255,255,255,0.1); border-radius: 9px;
+    width: 100%; padding: 11px 13px; background: var(--input);
+    border: 1px solid var(--border); border-radius: 9px;
     color: #fff; font-size: 13.5px; outline: none; font-family: inherit;
   }
   .modal-field textarea { resize: vertical; min-height: 90px; }
@@ -296,11 +402,22 @@ CHAT_PAGE = """
 <div class="bg-glow glow-2"></div>
 
 <div class="sidebar">
-  <div class="brand"><div class="badge">💬</div>Chat Studio</div>
+  <div class="brand"><div class="badge">💬</div><div>Chat Studio<div class="brand-owner">Hedobriggs 😉</div></div></div>
 
-  <div class="section-label">Personalities</div>
-  <div class="personality-list" id="personalityList"></div>
+  <button class="new-chat-btn" id="newChatBtn">+ New Chat</button>
+  <div class="section-label">Chats</div>
+  <div class="chat-list" id="chatList"></div>
 
+  <div class="section-label">Personality</div>
+  <div class="personality-control">
+    <select id="personalitySelect">
+      <option value="">Default Assistant</option>
+    </select>
+    <div class="personality-mini-actions" id="personalityMiniActions">
+      <button class="mini-action" id="editPersonalityBtn" title="Edit personality">✎</button>
+      <button class="mini-action danger" id="deletePersonalityBtn" title="Delete personality">×</button>
+    </div>
+  </div>
   <button class="new-personality-btn" id="newPersonalityBtn">+ New Personality</button>
   <a href="/logout" class="logout-link">Sign Out</a>
 </div>
@@ -311,6 +428,7 @@ CHAT_PAGE = """
       <h2 id="activeModelName">Default Assistant</h2>
       <span class="model-tag" id="activeModelTag">llama3.2</span>
     </div>
+    <button class="theme-toggle" id="themeToggle">☀️ Light</button>
   </div>
 
   <div class="messages" id="messages">
@@ -326,7 +444,7 @@ CHAT_PAGE = """
 
 <div class="modal-overlay" id="modalOverlay">
   <div class="modal-card">
-    <h3>Create a New Personality</h3>
+    <h3 id="personaModalTitle">Create a New Personality</h3>
     <div class="modal-field">
       <label>Name</label>
       <input type="text" id="personaName" placeholder="e.g. pirate-buddy">
@@ -339,7 +457,7 @@ CHAT_PAGE = """
       <button class="btn-cancel" id="modalCancel">Cancel</button>
       <button class="btn-create" id="modalCreate">Create</button>
     </div>
-    <div class="modal-status" id="modalStatus">Creating personality... this may take a moment.</div>
+    <div class="modal-status" id="modalStatus">Saving personality...</div>
   </div>
 </div>
 
@@ -348,11 +466,18 @@ CHAT_PAGE = """
   const userInput = document.getElementById('userInput');
   const sendBtn = document.getElementById('sendBtn');
   const stopBtn = document.getElementById('stopBtn');
-  const personalityList = document.getElementById('personalityList');
+  const newChatBtn = document.getElementById('newChatBtn');
+  const chatList = document.getElementById('chatList');
+  const personalitySelect = document.getElementById('personalitySelect');
   const activeModelName = document.getElementById('activeModelName');
   const activeModelTag = document.getElementById('activeModelTag');
+  const themeToggle = document.getElementById('themeToggle');
 
   const newPersonalityBtn = document.getElementById('newPersonalityBtn');
+  const editPersonalityBtn = document.getElementById('editPersonalityBtn');
+  const deletePersonalityBtn = document.getElementById('deletePersonalityBtn');
+  const personalityMiniActions = document.getElementById('personalityMiniActions');
+  const personaModalTitle = document.getElementById('personaModalTitle');
   const modalOverlay = document.getElementById('modalOverlay');
   const modalCancel = document.getElementById('modalCancel');
   const modalCreate = document.getElementById('modalCreate');
@@ -361,9 +486,27 @@ CHAT_PAGE = """
   const modalStatus = document.getElementById('modalStatus');
 
   let currentModel = "{{ base_model }}";
+  let currentPersonalityId = null;
+  let currentPersonalityName = 'Default Assistant';
+  let editingPersonalityId = null;
+  let currentChatId = null;
   let conversation = [];
   let activeController = null;
   let isGenerating = false;
+
+  function applyTheme(theme) {
+    const isLight = theme === 'light';
+    document.body.classList.toggle('light-theme', isLight);
+    themeToggle.textContent = isLight ? '🌙 Dark' : '☀️ Light';
+    localStorage.setItem('chatStudioTheme', theme);
+  }
+
+  themeToggle.addEventListener('click', () => {
+    const next = document.body.classList.contains('light-theme') ? 'dark' : 'light';
+    applyTheme(next);
+  });
+
+  applyTheme(localStorage.getItem('chatStudioTheme') || 'dark');
 
   function addMessage(role, text) {
     const div = document.createElement('div');
@@ -374,38 +517,102 @@ CHAT_PAGE = """
     return div;
   }
 
-  async function loadPersonalities() {
-    const res = await fetch('/api/personalities');
+  async function loadChats() {
+    const res = await fetch('/api/chats');
     const data = await res.json();
-    personalityList.innerHTML = '';
-
-    const defaultItem = document.createElement('div');
-    defaultItem.className = 'personality-item active';
-    defaultItem.textContent = 'Default Assistant';
-    defaultItem.dataset.model = "{{ base_model }}";
-    defaultItem.addEventListener('click', () => selectPersonality(defaultItem));
-    personalityList.appendChild(defaultItem);
-
-    data.personalities.forEach(name => {
+    chatList.innerHTML = '';
+    data.chats.forEach(chat => {
       const item = document.createElement('div');
-      item.className = 'personality-item';
-      item.textContent = name;
-      item.dataset.model = name;
-      item.addEventListener('click', () => selectPersonality(item));
-      personalityList.appendChild(item);
+      item.className = 'chat-item' + (chat.id === currentChatId ? ' active' : '');
+      const title = document.createElement('span');
+      title.className = 'chat-title';
+      title.textContent = chat.title;
+      title.onclick = () => openChat(chat.id);
+      const del = document.createElement('button');
+      del.className = 'delete-chat'; del.textContent = '×'; del.title = 'Delete chat';
+      del.onclick = async (e) => {
+        e.stopPropagation();
+        if (!confirm(`Delete "${chat.title}"?`)) return;
+        await fetch(`/api/chats/${chat.id}`, {method:'DELETE'});
+        if (currentChatId === chat.id) newChat();
+        await loadChats();
+      };
+      item.append(title, del); chatList.appendChild(item);
     });
   }
 
-  function selectPersonality(item) {
-    document.querySelectorAll('.personality-item').forEach(el => el.classList.remove('active'));
-    item.classList.add('active');
-    currentModel = item.dataset.model;
-    activeModelName.textContent = item.textContent;
+  function newChat() {
+    if (activeController) activeController.abort();
+    currentChatId = null; conversation = []; messagesEl.innerHTML = '';
+    addMessage('assistant', 'New chat started. What would you like to talk about?');
+    loadChats(); userInput.focus();
+  }
+
+  async function openChat(id) {
+    if (isGenerating) return;
+    const res = await fetch(`/api/chats/${id}`); if (!res.ok) return;
+    const data = await res.json();
+    currentChatId = data.chat.id;
+    currentModel = "{{ base_model }}";
+    currentPersonalityId = data.chat.personality_id || null;
+    currentPersonalityName = data.chat.personality_name || 'Default Assistant';
+    conversation = data.messages.map(m => ({role:m.role, content:m.content}));
     activeModelTag.textContent = currentModel;
+    activeModelName.textContent = currentPersonalityName;
+    personalitySelect.value = currentPersonalityId ? String(currentPersonalityId) : '';
+    updatePersonalityActions();
+    messagesEl.innerHTML = ''; data.messages.forEach(m => addMessage(m.role, m.content));
+    await loadChats();
+  }
+
+  async function ensureChat(prompt) {
+    if (currentChatId) return currentChatId;
+    const res = await fetch('/api/chats', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({first_prompt:prompt, personality_id:currentPersonalityId})});
+    const data = await res.json(); currentChatId = data.id; await loadChats(); return currentChatId;
+  }
+
+  async function saveMessage(id, role, content) {
+    if (!id || !content.trim()) return;
+    await fetch(`/api/chats/${id}/messages`, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({role,content})});
+    await loadChats();
+  }
+
+  async function loadPersonalities() {
+    const res = await fetch('/api/personalities');
+    const data = await res.json();
+    personalitySelect.innerHTML = '<option value="">Default Assistant</option>';
+    data.personalities.forEach(persona => {
+      const option = document.createElement('option');
+      option.value = String(persona.id);
+      option.textContent = persona.name;
+      personalitySelect.appendChild(option);
+    });
+    personalitySelect.value = currentPersonalityId ? String(currentPersonalityId) : '';
+    updatePersonalityActions();
+  }
+
+  function updatePersonalityActions() {
+    personalityMiniActions.classList.toggle('show', !!currentPersonalityId);
+  }
+
+  function selectPersonality(id, label) {
+    currentPersonalityId = id ? Number(id) : null;
+    currentPersonalityName = label || 'Default Assistant';
+    currentModel = "{{ base_model }}";
+    activeModelName.textContent = currentPersonalityName;
+    activeModelTag.textContent = currentModel;
+    currentChatId = null;
     conversation = [];
     messagesEl.innerHTML = '';
-    addMessage('assistant', `Switched to "${item.textContent}". Say hello!`);
+    addMessage('assistant', `Switched to "${currentPersonalityName}". A new chat is ready.`);
+    updatePersonalityActions();
+    loadChats();
   }
+
+  personalitySelect.addEventListener('change', () => {
+    const option = personalitySelect.options[personalitySelect.selectedIndex];
+    selectPersonality(personalitySelect.value, option.textContent);
+  });
 
   async function sendMessage() {
     const text = userInput.value.trim();
@@ -414,11 +621,14 @@ CHAT_PAGE = """
     isGenerating = true;
     activeController = new AbortController();
 
+    const chatId = await ensureChat(text);
     addMessage('user', text);
     conversation.push({ role: 'user', content: text });
+    await saveMessage(chatId, 'user', text);
     userInput.value = '';
 
     sendBtn.disabled = true;
+    sendBtn.classList.add('generating');
     stopBtn.classList.add('show');
 
     const thinkingEl = addMessage('thinking', 'Thinking...');
@@ -434,6 +644,7 @@ CHAT_PAGE = """
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           model: currentModel,
+          personality_id: currentPersonalityId,
           messages: conversation.slice(-6)
         }),
         signal: activeController.signal
@@ -483,6 +694,7 @@ CHAT_PAGE = """
           role: 'assistant',
           content: fullReply
         });
+        await saveMessage(chatId, 'assistant', fullReply);
       }
 
     } catch (err) {
@@ -522,6 +734,7 @@ CHAT_PAGE = """
       isGenerating = false;
       activeController = null;
       sendBtn.disabled = false;
+      sendBtn.classList.remove('generating');
       stopBtn.classList.remove('show');
       userInput.focus();
     }
@@ -533,6 +746,7 @@ CHAT_PAGE = """
     }
   });
 
+  newChatBtn.addEventListener('click', newChat);
   sendBtn.addEventListener('click', sendMessage);
   userInput.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -541,30 +755,66 @@ CHAT_PAGE = """
     }
   });
 
-  newPersonalityBtn.addEventListener('click', () => modalOverlay.classList.add('show'));
+  newPersonalityBtn.addEventListener('click', () => {
+    editingPersonalityId = null;
+    personaModalTitle.textContent = 'Create a New Personality';
+    modalCreate.textContent = 'Create';
+    personaName.value = '';
+    personaPrompt.value = '';
+    modalOverlay.classList.add('show');
+  });
+
+  editPersonalityBtn.addEventListener('click', async () => {
+    if (!currentPersonalityId) return;
+    const res = await fetch(`/api/personalities/${currentPersonalityId}`);
+    const data = await res.json();
+    if (!res.ok) return alert(data.error || 'Could not load personality.');
+    editingPersonalityId = currentPersonalityId;
+    personaModalTitle.textContent = 'Edit Personality';
+    modalCreate.textContent = 'Save Changes';
+    personaName.value = data.personality.name;
+    personaPrompt.value = data.personality.system_prompt;
+    modalOverlay.classList.add('show');
+  });
+
+  deletePersonalityBtn.addEventListener('click', async () => {
+    if (!currentPersonalityId) return;
+    if (!confirm(`Delete "${currentPersonalityName}"? Existing chats keep their saved personality.`)) return;
+    const res = await fetch(`/api/personalities/${currentPersonalityId}`, { method: 'DELETE' });
+    const data = await res.json();
+    if (!res.ok) return alert(data.error || 'Could not delete personality.');
+    currentPersonalityId = null;
+    currentPersonalityName = 'Default Assistant';
+    activeModelName.textContent = currentPersonalityName;
+    activeModelTag.textContent = "{{ base_model }}";
+    await loadPersonalities();
+  });
+
   modalCancel.addEventListener('click', () => modalOverlay.classList.remove('show'));
 
   modalCreate.addEventListener('click', async () => {
     const name = personaName.value.trim();
     const prompt = personaPrompt.value.trim();
-    if (!name || !prompt) return;
-
+    if (!name || !prompt) return alert('Name and personality prompt are required.');
     modalStatus.style.display = 'block';
     modalCreate.disabled = true;
-
     try {
-      const res = await fetch('/api/personalities', {
-        method: 'POST',
+      const endpoint = editingPersonalityId ? `/api/personalities/${editingPersonalityId}` : '/api/personalities';
+      const method = editingPersonalityId ? 'PUT' : 'POST';
+      const res = await fetch(endpoint, {
+        method,
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name, system_prompt: prompt })
       });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Failed to create personality.');
-
+      if (!res.ok) throw new Error(data.error || 'Failed to save personality.');
+      currentPersonalityId = data.personality.id;
+      currentPersonalityName = data.personality.name;
+      activeModelName.textContent = currentPersonalityName;
+      activeModelTag.textContent = "{{ base_model }}";
       await loadPersonalities();
       modalOverlay.classList.remove('show');
-      personaName.value = '';
-      personaPrompt.value = '';
+      editingPersonalityId = null;
     } catch (err) {
       alert(err.message);
     } finally {
@@ -574,6 +824,7 @@ CHAT_PAGE = """
   });
 
   loadPersonalities();
+  loadChats();
 </script>
 
 </body>
@@ -604,56 +855,170 @@ def index():
     return render_template_string(CHAT_PAGE, base_model=BASE_MODEL)
 
 
+@app.route("/api/chats", methods=["GET"])
+@login_required
+def list_chats():
+    with get_db() as conn:
+        rows = conn.execute("SELECT id,title,model,personality_id,personality_name,created_at,updated_at FROM chats ORDER BY updated_at DESC,id DESC").fetchall()
+    return jsonify({"chats": [dict(r) for r in rows]})
+
+@app.route("/api/chats", methods=["POST"])
+@login_required
+def create_chat():
+    data = request.get_json(force=True)
+    prompt = data.get("first_prompt", "").strip()
+    personality_id = data.get("personality_id")
+    title = " ".join(prompt.split()[:6]) or "New Chat"
+    if len(title) > 42:
+        title = title[:39].rstrip() + "..."
+
+    personality_name = "Default Assistant"
+    system_prompt = None
+    with get_db() as conn:
+        if personality_id:
+            persona = conn.execute(
+                "SELECT id,name,system_prompt FROM personalities WHERE id=?", (personality_id,)
+            ).fetchone()
+            if not persona:
+                return jsonify({"error": "Personality not found."}), 404
+            personality_id = persona["id"]
+            personality_name = persona["name"]
+            system_prompt = persona["system_prompt"]
+
+        cur = conn.execute(
+            "INSERT INTO chats (title,model,personality_id,personality_name,system_prompt) VALUES (?,?,?,?,?)",
+            (title, BASE_MODEL, personality_id, personality_name, system_prompt),
+        )
+        conn.commit()
+    return jsonify({"id": cur.lastrowid, "title": title, "model": BASE_MODEL,
+                    "personality_id": personality_id, "personality_name": personality_name})
+
+@app.route("/api/chats/<int:chat_id>", methods=["GET"])
+@login_required
+def get_chat(chat_id):
+    with get_db() as conn:
+        chat = conn.execute("SELECT id,title,model,personality_id,personality_name,system_prompt,created_at,updated_at FROM chats WHERE id=?", (chat_id,)).fetchone()
+        if not chat: return jsonify({"error":"Chat not found."}),404
+        msgs = conn.execute("SELECT role,content,created_at FROM messages WHERE chat_id=? ORDER BY id", (chat_id,)).fetchall()
+    return jsonify({"chat":dict(chat), "messages":[dict(m) for m in msgs]})
+
+@app.route("/api/chats/<int:chat_id>/messages", methods=["POST"])
+@login_required
+def save_chat_message(chat_id):
+    data=request.get_json(force=True); role=data.get("role",""); content=data.get("content","").strip()
+    if role not in {"user","assistant"} or not content: return jsonify({"error":"Invalid message."}),400
+    with get_db() as conn:
+        conn.execute("INSERT INTO messages (chat_id,role,content) VALUES (?,?,?)",(chat_id,role,content))
+        conn.execute("UPDATE chats SET updated_at=CURRENT_TIMESTAMP WHERE id=?",(chat_id,))
+        conn.commit()
+    return jsonify({"status":"saved"})
+
+@app.route("/api/chats/<int:chat_id>", methods=["DELETE"])
+@login_required
+def delete_chat(chat_id):
+    with get_db() as conn:
+        conn.execute("DELETE FROM messages WHERE chat_id=?",(chat_id,))
+        conn.execute("DELETE FROM chats WHERE id=?",(chat_id,))
+        conn.commit()
+    return jsonify({"status":"deleted"})
+
+
 @app.route("/api/personalities", methods=["GET"])
 @login_required
 def list_personalities():
-    try:
-        res = requests.get(f"{OLLAMA_HOST}/api/tags", timeout=10)
-        res.raise_for_status()
-        models = [m["name"] for m in res.json().get("models", [])]
-        custom = [m for m in models if not m.startswith(BASE_MODEL)]
-        return jsonify({"personalities": custom})
-    except Exception as e:
-        return jsonify({"personalities": [], "error": str(e)})
+    with get_db() as conn:
+        rows = conn.execute("SELECT id,name,base_model FROM personalities ORDER BY name COLLATE NOCASE").fetchall()
+    return jsonify({"personalities": [dict(row) for row in rows]})
 
 
 @app.route("/api/personalities", methods=["POST"])
 @login_required
 def create_personality():
     data = request.get_json(force=True)
-    name = data.get("name", "").strip().lower().replace(" ", "-")
+    name = data.get("name", "").strip()
     system_prompt = data.get("system_prompt", "").strip()
-
     if not name or not system_prompt:
         return jsonify({"error": "Name and personality prompt are required."}), 400
-
     try:
-        res = requests.post(
-            f"{OLLAMA_HOST}/api/create",
-            json={
-                "model": name,
-                "from": BASE_MODEL,
-                "system": system_prompt,
-            },
-            timeout=120,
-        )
-        res.raise_for_status()
-        return jsonify({"status": "created", "name": name})
-    except Exception as e:
-        return jsonify({"error": f"Failed to create personality: {e}"}), 500
+        with get_db() as conn:
+            cur = conn.execute("INSERT INTO personalities (name,system_prompt,base_model) VALUES (?,?,?)",
+                               (name, system_prompt, BASE_MODEL))
+            conn.commit()
+            row = conn.execute("SELECT id,name,system_prompt,base_model FROM personalities WHERE id=?",
+                               (cur.lastrowid,)).fetchone()
+        return jsonify({"status": "created", "personality": dict(row)})
+    except sqlite3.IntegrityError:
+        return jsonify({"error": "A personality with that name already exists."}), 409
+
+
+@app.route("/api/personalities/<int:personality_id>", methods=["GET"])
+@login_required
+def get_personality(personality_id):
+    with get_db() as conn:
+        row = conn.execute("SELECT id,name,system_prompt,base_model FROM personalities WHERE id=?",
+                           (personality_id,)).fetchone()
+    if not row:
+        return jsonify({"error": "Personality not found."}), 404
+    return jsonify({"personality": dict(row)})
+
+
+@app.route("/api/personalities/<int:personality_id>", methods=["PUT"])
+@login_required
+def update_personality(personality_id):
+    data = request.get_json(force=True)
+    name = data.get("name", "").strip()
+    system_prompt = data.get("system_prompt", "").strip()
+    if not name or not system_prompt:
+        return jsonify({"error": "Name and personality prompt are required."}), 400
+    try:
+        with get_db() as conn:
+            if not conn.execute("SELECT id FROM personalities WHERE id=?", (personality_id,)).fetchone():
+                return jsonify({"error": "Personality not found."}), 404
+            conn.execute("UPDATE personalities SET name=?,system_prompt=?,base_model=?,updated_at=CURRENT_TIMESTAMP WHERE id=?",
+                         (name, system_prompt, BASE_MODEL, personality_id))
+            conn.commit()
+            row = conn.execute("SELECT id,name,system_prompt,base_model FROM personalities WHERE id=?",
+                               (personality_id,)).fetchone()
+        return jsonify({"status": "updated", "personality": dict(row)})
+    except sqlite3.IntegrityError:
+        return jsonify({"error": "A personality with that name already exists."}), 409
+
+
+@app.route("/api/personalities/<int:personality_id>", methods=["DELETE"])
+@login_required
+def delete_personality(personality_id):
+    with get_db() as conn:
+        if not conn.execute("SELECT id FROM personalities WHERE id=?", (personality_id,)).fetchone():
+            return jsonify({"error": "Personality not found."}), 404
+        conn.execute("DELETE FROM personalities WHERE id=?", (personality_id,))
+        conn.commit()
+    return jsonify({"status": "deleted"})
 
 
 @app.route("/api/chat", methods=["POST"])
 @login_required
 def chat():
     data = request.get_json(force=True)
-    model = data.get("model", BASE_MODEL)
+    personality_id = data.get("personality_id")
     messages = data.get("messages", [])[-6:]
+
+    system_prompt = None
+    if personality_id:
+        with get_db() as conn:
+            persona = conn.execute("SELECT system_prompt FROM personalities WHERE id=?",
+                                   (personality_id,)).fetchone()
+        if not persona:
+            return jsonify({"error": "Personality not found."}), 404
+        system_prompt = persona["system_prompt"]
+
+    ollama_messages = list(messages)
+    if system_prompt:
+        ollama_messages.insert(0, {"role": "system", "content": system_prompt})
 
     try:
         res = requests.post(
             f"{OLLAMA_HOST}/api/chat",
-            json={"model": model, "messages": messages, "stream": True},
+            json={"model": BASE_MODEL, "messages": ollama_messages, "stream": True},
             stream=True,
             timeout=(10, 120),
         )
@@ -683,7 +1048,7 @@ def chat():
 if __name__ == "__main__":
     print("\n🚀 Starting Chat Studio...")
     print("   Open your browser to: http://127.0.0.1:5000")
-    print(f"   Login password: {APP_PASSWORD}")
     print(f"   Ollama host: {OLLAMA_HOST}\n")
     app.run(host="0.0.0.0", port=5000, debug=False)
+
 

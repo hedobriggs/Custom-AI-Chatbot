@@ -3,6 +3,13 @@ services:
     build: .
     ports:
       - "5000:5000"
+    env_file:
+      - .env
     environment:
-      - OLLAMA_HOST=http://host.docker.internal:11434
-      - BASE_MODEL=llama3.2
+      OLLAMA_HOST: http://host.docker.internal:11434
+      BASE_MODEL: ${BASE_MODEL:-llama3.2}
+      CHAT_DB_PATH: /app/data/chat_studio.db
+    volumes:
+      - ./data:/app/data
+    restart: unless-stopped
+
