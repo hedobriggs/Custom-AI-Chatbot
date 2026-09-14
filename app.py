@@ -266,22 +266,68 @@ CHAT_PAGE = """
     background: rgba(108,92,231,0.15); border-color: rgba(108,92,231,0.4); color: #fff;
   }
   .personality-control { position: relative; margin-bottom: 12px; }
-  .personality-control select {
-    width: 100%; padding: 11px 68px 11px 12px; background: var(--panel-strong);
-    border: 1px solid var(--border); border-radius: 10px; color: var(--text);
-    font-size: 13px; outline: none;
+  .personality-trigger {
+    width: 100%; min-height: 42px; display: flex; align-items: center;
+    justify-content: space-between; gap: 10px; padding: 10px 12px;
+    background: var(--panel-strong); border: 1px solid var(--border);
+    border-radius: 10px; color: var(--text); font-size: 13px;
+    cursor: pointer; text-align: left;
   }
-  .personality-mini-actions {
-    position: absolute; right: 7px; top: 50%; transform: translateY(-50%);
-    display: none; gap: 2px;
+  .personality-trigger:hover { border-color: rgba(108,92,231,.55); }
+  .dropdown-chevron { color: var(--muted); font-size: 17px; line-height: 1; }
+
+  .personality-dropdown {
+    display: none; position: absolute; z-index: 50; left: 0; right: 0;
+    top: calc(100% + 6px); padding: 5px; max-height: 230px; overflow-y: auto;
+    background: var(--panel-strong); border: 1px solid var(--border);
+    border-radius: 11px; box-shadow: 0 14px 35px rgba(0,0,0,.28);
   }
-  .personality-mini-actions.show { display: flex; }
-  .mini-action {
-    width: 24px; height: 24px; padding: 0; border: 0; border-radius: 6px;
-    background: transparent; color: var(--muted); cursor: pointer; font-size: 14px;
+  .personality-dropdown.show { display: block; }
+
+  .personality-option {
+    position: relative; display: flex; align-items: center; min-height: 38px;
+    border-radius: 8px; margin: 2px 0;
   }
-  .mini-action:hover { background: var(--input); color: var(--text); }
-  .mini-action.danger:hover { color: #ff6b6b; }
+  .personality-option:hover { background: var(--input); }
+  .personality-option.active { font-weight: 600; }
+
+  .personality-option-name {
+    flex: 1; min-width: 0; padding: 10px 42px 10px 10px;
+    border: 0; background: transparent; color: var(--text);
+    font-size: 12.5px; cursor: pointer; text-align: left;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+
+  .persona-menu-button {
+    position: absolute; right: 6px; top: 50%; transform: translateY(-50%);
+    width: 30px; height: 30px; border: 0; border-radius: 7px;
+    background: transparent; color: var(--text); cursor: pointer;
+    font-size: 21px; font-weight: 700; line-height: 1;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .persona-menu-button:hover { background: rgba(108,92,231,.18); }
+
+  .persona-action-menu {
+    display: none; position: absolute; z-index: 60; right: 4px; top: 34px;
+    width: 125px; padding: 5px; background: var(--panel-strong);
+    border: 1px solid var(--border); border-radius: 9px;
+    box-shadow: 0 10px 28px rgba(0,0,0,.30);
+  }
+  .persona-action-menu.show { display: block; }
+
+  .persona-action-item {
+    width: 100%; display: flex; align-items: center; gap: 9px;
+    padding: 8px 9px; border: 0; border-radius: 7px;
+    background: transparent; color: var(--text); cursor: pointer;
+    font-size: 12.5px; text-align: left;
+  }
+  .persona-action-item:hover { background: var(--input); }
+  .persona-action-item.delete { color: #ff7070; }
+  .persona-action-icon {
+    width: 19px; height: 19px; display: inline-flex; align-items: center;
+    justify-content: center; font-size: 16px; line-height: 1; flex: 0 0 19px;
+  }
+
   .new-personality-btn {
     width: 100%; padding: 12px; background: rgba(255,255,255,0.05);
     border: 1px dashed rgba(255,255,255,0.15); border-radius: 10px;
@@ -408,15 +454,12 @@ CHAT_PAGE = """
   <div class="section-label">Chats</div>
   <div class="chat-list" id="chatList"></div>
 
-  <div class="section-label">Personality</div>
-  <div class="personality-control">
-    <select id="personalitySelect">
-      <option value="">Default Assistant</option>
-    </select>
-    <div class="personality-mini-actions" id="personalityMiniActions">
-      <button class="mini-action" id="editPersonalityBtn" title="Edit personality">✎</button>
-      <button class="mini-action danger" id="deletePersonalityBtn" title="Delete personality">×</button>
-    </div>
+  <div class="personality-control" id="personalityControl">
+    <button class="personality-trigger" id="personalityTrigger" type="button" aria-haspopup="listbox" aria-expanded="false">
+      <span id="personalityTriggerName">Personality</span>
+      <span class="dropdown-chevron">▼</span>
+    </button>
+    <div class="personality-dropdown" id="personalityDropdown"></div>
   </div>
   <button class="new-personality-btn" id="newPersonalityBtn">+ New Personality</button>
   <a href="/logout" class="logout-link">Sign Out</a>
@@ -468,15 +511,15 @@ CHAT_PAGE = """
   const stopBtn = document.getElementById('stopBtn');
   const newChatBtn = document.getElementById('newChatBtn');
   const chatList = document.getElementById('chatList');
-  const personalitySelect = document.getElementById('personalitySelect');
+  const personalityControl = document.getElementById('personalityControl');
+  const personalityTrigger = document.getElementById('personalityTrigger');
+  const personalityTriggerName = document.getElementById('personalityTriggerName');
+  const personalityDropdown = document.getElementById('personalityDropdown');
   const activeModelName = document.getElementById('activeModelName');
   const activeModelTag = document.getElementById('activeModelTag');
   const themeToggle = document.getElementById('themeToggle');
 
   const newPersonalityBtn = document.getElementById('newPersonalityBtn');
-  const editPersonalityBtn = document.getElementById('editPersonalityBtn');
-  const deletePersonalityBtn = document.getElementById('deletePersonalityBtn');
-  const personalityMiniActions = document.getElementById('personalityMiniActions');
   const personaModalTitle = document.getElementById('personaModalTitle');
   const modalOverlay = document.getElementById('modalOverlay');
   const modalCancel = document.getElementById('modalCancel');
@@ -559,8 +602,8 @@ CHAT_PAGE = """
     conversation = data.messages.map(m => ({role:m.role, content:m.content}));
     activeModelTag.textContent = currentModel;
     activeModelName.textContent = currentPersonalityName;
-    personalitySelect.value = currentPersonalityId ? String(currentPersonalityId) : '';
-    updatePersonalityActions();
+    personalityTriggerName.textContent = 'Personality';
+    renderPersonalityDropdown();
     messagesEl.innerHTML = ''; data.messages.forEach(m => addMessage(m.role, m.content));
     await loadChats();
   }
@@ -577,42 +620,152 @@ CHAT_PAGE = """
     await loadChats();
   }
 
+  let personalities = [];
+
   async function loadPersonalities() {
     const res = await fetch('/api/personalities');
     const data = await res.json();
-    personalitySelect.innerHTML = '<option value="">Default Assistant</option>';
-    data.personalities.forEach(persona => {
-      const option = document.createElement('option');
-      option.value = String(persona.id);
-      option.textContent = persona.name;
-      personalitySelect.appendChild(option);
-    });
-    personalitySelect.value = currentPersonalityId ? String(currentPersonalityId) : '';
-    updatePersonalityActions();
+    personalities = data.personalities || [];
+    renderPersonalityDropdown();
   }
 
-  function updatePersonalityActions() {
-    personalityMiniActions.classList.toggle('show', !!currentPersonalityId);
+  function closePersonalityMenus() {
+    personalityDropdown.classList.remove('show');
+    personalityTrigger.setAttribute('aria-expanded', 'false');
+    document.querySelectorAll('.persona-action-menu.show').forEach(menu => {
+      menu.classList.remove('show');
+    });
+  }
+
+  function renderPersonalityDropdown() {
+    personalityDropdown.innerHTML = '';
+
+    const rows = [
+      { id: null, name: 'Default Assistant', isDefault: true },
+      ...personalities.map(p => ({ ...p, isDefault: false }))
+    ];
+
+    rows.forEach(persona => {
+      const row = document.createElement('div');
+      row.className = 'personality-option' +
+        ((persona.id || null) === currentPersonalityId ? ' active' : '');
+
+      const nameBtn = document.createElement('button');
+      nameBtn.type = 'button';
+      nameBtn.className = 'personality-option-name';
+      nameBtn.textContent =
+        ((persona.id || null) === currentPersonalityId ? '✓  ' : '   ') + persona.name;
+      nameBtn.title = `Use ${persona.name}`;
+      nameBtn.addEventListener('click', () => {
+        selectPersonality(persona.id, persona.name);
+        closePersonalityMenus();
+      });
+      row.appendChild(nameBtn);
+
+      if (!persona.isDefault) {
+        const dots = document.createElement('button');
+        dots.type = 'button';
+        dots.className = 'persona-menu-button';
+        dots.textContent = '⋮';
+        dots.title = `Manage ${persona.name}`;
+        dots.setAttribute('aria-label', `Manage ${persona.name}`);
+
+        const menu = document.createElement('div');
+        menu.className = 'persona-action-menu';
+
+        const edit = document.createElement('button');
+        edit.type = 'button';
+        edit.className = 'persona-action-item';
+        edit.innerHTML = '<span class="persona-action-icon">✎</span><span>Edit</span>';
+        edit.addEventListener('click', async (event) => {
+          event.stopPropagation();
+          closePersonalityMenus();
+          await editPersonality(persona.id);
+        });
+
+        const del = document.createElement('button');
+        del.type = 'button';
+        del.className = 'persona-action-item delete';
+        del.innerHTML = '<span class="persona-action-icon">🗑</span><span>Delete</span>';
+        del.addEventListener('click', async (event) => {
+          event.stopPropagation();
+          closePersonalityMenus();
+          await deletePersonality(persona.id, persona.name);
+        });
+
+        menu.append(edit, del);
+        row.append(dots, menu);
+
+        dots.addEventListener('click', (event) => {
+          event.stopPropagation();
+          const wasOpen = menu.classList.contains('show');
+          document.querySelectorAll('.persona-action-menu.show').forEach(m => m.classList.remove('show'));
+          if (!wasOpen) menu.classList.add('show');
+        });
+      }
+
+      personalityDropdown.appendChild(row);
+    });
   }
 
   function selectPersonality(id, label) {
     currentPersonalityId = id ? Number(id) : null;
     currentPersonalityName = label || 'Default Assistant';
     currentModel = "{{ base_model }}";
+    personalityTriggerName.textContent = 'Personality';
     activeModelName.textContent = currentPersonalityName;
     activeModelTag.textContent = currentModel;
     currentChatId = null;
     conversation = [];
     messagesEl.innerHTML = '';
     addMessage('assistant', `Switched to "${currentPersonalityName}". A new chat is ready.`);
-    updatePersonalityActions();
+    renderPersonalityDropdown();
     loadChats();
   }
 
-  personalitySelect.addEventListener('change', () => {
-    const option = personalitySelect.options[personalitySelect.selectedIndex];
-    selectPersonality(personalitySelect.value, option.textContent);
+  personalityTrigger.addEventListener('click', (event) => {
+    event.stopPropagation();
+    const opening = !personalityDropdown.classList.contains('show');
+    closePersonalityMenus();
+    if (opening) {
+      personalityDropdown.classList.add('show');
+      personalityTrigger.setAttribute('aria-expanded', 'true');
+    }
   });
+
+  document.addEventListener('click', (event) => {
+    if (!personalityControl.contains(event.target)) closePersonalityMenus();
+  });
+
+  async function editPersonality(id) {
+    const res = await fetch(`/api/personalities/${id}`);
+    const data = await res.json();
+    if (!res.ok) return alert(data.error || 'Could not load personality.');
+
+    editingPersonalityId = id;
+    personaModalTitle.textContent = 'Edit Personality';
+    modalCreate.textContent = 'Save Changes';
+    personaName.value = data.personality.name;
+    personaPrompt.value = data.personality.system_prompt;
+    modalOverlay.classList.add('show');
+  }
+
+  async function deletePersonality(id, name) {
+    if (!confirm(`Delete "${name}"? Existing chats keep their saved personality.`)) return;
+
+    const res = await fetch(`/api/personalities/${id}`, { method: 'DELETE' });
+    const data = await res.json();
+    if (!res.ok) return alert(data.error || 'Could not delete personality.');
+
+    if (currentPersonalityId === id) {
+      currentPersonalityId = null;
+      currentPersonalityName = 'Default Assistant';
+      personalityTriggerName.textContent = 'Personality';
+      activeModelName.textContent = currentPersonalityName;
+      activeModelTag.textContent = "{{ base_model }}";
+    }
+    await loadPersonalities();
+  }
 
   async function sendMessage() {
     const text = userInput.value.trim();
@@ -762,32 +915,6 @@ CHAT_PAGE = """
     personaName.value = '';
     personaPrompt.value = '';
     modalOverlay.classList.add('show');
-  });
-
-  editPersonalityBtn.addEventListener('click', async () => {
-    if (!currentPersonalityId) return;
-    const res = await fetch(`/api/personalities/${currentPersonalityId}`);
-    const data = await res.json();
-    if (!res.ok) return alert(data.error || 'Could not load personality.');
-    editingPersonalityId = currentPersonalityId;
-    personaModalTitle.textContent = 'Edit Personality';
-    modalCreate.textContent = 'Save Changes';
-    personaName.value = data.personality.name;
-    personaPrompt.value = data.personality.system_prompt;
-    modalOverlay.classList.add('show');
-  });
-
-  deletePersonalityBtn.addEventListener('click', async () => {
-    if (!currentPersonalityId) return;
-    if (!confirm(`Delete "${currentPersonalityName}"? Existing chats keep their saved personality.`)) return;
-    const res = await fetch(`/api/personalities/${currentPersonalityId}`, { method: 'DELETE' });
-    const data = await res.json();
-    if (!res.ok) return alert(data.error || 'Could not delete personality.');
-    currentPersonalityId = null;
-    currentPersonalityName = 'Default Assistant';
-    activeModelName.textContent = currentPersonalityName;
-    activeModelTag.textContent = "{{ base_model }}";
-    await loadPersonalities();
   });
 
   modalCancel.addEventListener('click', () => modalOverlay.classList.remove('show'));
